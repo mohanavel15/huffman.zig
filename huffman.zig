@@ -38,7 +38,7 @@ pub fn encode(allocator: Allocator, buffer: []u8) !Encoded {
 
     std.debug.print("Tree: \n", .{});
     const node = buildTree(encoded.probs);
-    displayTree("", node);
+    displayTree(node, "", true);
 
     var bitTable: [256]CodeBlock = undefined;
     @memset(&bitTable, .{ .bits = 0, .len = 0 });
@@ -131,18 +131,21 @@ pub fn buildTree(probs: []f64) *Node {
     return nonZeroNode[0];
 }
 
-pub fn displayTree(prefix: []const u8, node: *Node) void {
-    std.debug.print("{s}[{c}]\n", .{ prefix, node.value orelse '+' });
+pub fn displayTree(node: *Node, prefix: []const u8, is_left: bool) void {
+    if (node.right) |right| {
+        const prefix_right = std.fmt.allocPrint(std.heap.page_allocator, "{s}{s}", .{ prefix, if (is_left) "│   " else "    " }) catch unreachable;
+        defer std.heap.page_allocator.free(prefix_right);
 
-    const prefix1 = std.fmt.allocPrint(std.heap.page_allocator, "{s}\t", .{prefix}) catch unreachable;
-    defer std.heap.page_allocator.free(prefix1);
-
-    if (node.left) |left| {
-        displayTree(prefix1, left);
+        displayTree(right, prefix_right, false);
     }
 
-    if (node.right) |right| {
-        displayTree(prefix1, right);
+    std.debug.print("{s}{s}{c}\n", .{ prefix, if (is_left) "└── " else "┌── ", if (node.value == '\n') '\\' else (node.value orelse '+') });
+
+    if (node.left) |left| {
+        const prefix_left = std.fmt.allocPrint(std.heap.page_allocator, "{s}{s}", .{ prefix, if (!is_left) "│   " else "    " }) catch unreachable;
+        defer std.heap.page_allocator.free(prefix_left);
+
+        displayTree(left, prefix_left, true);
     }
 }
 
