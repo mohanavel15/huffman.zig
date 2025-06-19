@@ -1,45 +1,60 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
-pub fn encode(buffer: []u8) Encoded {
+const Node = struct {
+    value: ?u8,
+    probs: f64,
+    left: ?*Node,
+    right: ?*Node,
+};
+
+const CodeBlock = struct {
+    bits: u8,
+    len: u8,
+};
+
+pub const Encoded = struct {
+    probs: []f64,
+    encoded: []u8,
+    compressed_length: usize,
+    original_length: usize,
+    bit_length: usize,
+};
+
+pub fn encode(allocator: Allocator, buffer: []u8) !Encoded {
+    var encoded = Encoded{
+        .probs = try allocator.alloc(f64, 256),
+        .original_length = buffer.len,
+        .encoded = undefined,
+        .compressed_length = undefined,
+        .bit_length = undefined,
+    };
+    @memset(encoded.probs, 0);
+
     const prob: f64 = 1 / @as(f64, @floatFromInt(buffer.len));
-
-    var probs: [256]f64 = undefined;
-    @memset(&probs, 0);
-
     for (buffer) |byte| {
-        probs[byte] += prob;
+        encoded.probs[byte] += prob;
     }
 
-    const node = buildTree(&probs);
-    // displayTree("", node);
+    std.debug.print("Tree: \n", .{});
+    const node = buildTree(encoded.probs);
+    displayTree("", node);
 
     var bitTable: [256]CodeBlock = undefined;
     @memset(&bitTable, .{ .bits = 0, .len = 0 });
 
-    constructBitTable(bitTable[0..], node, 0, 0);
-
-    for (bitTable, 0..) |cb, i| {
-        if (cb.len >= 1) {
-            std.debug.print("[{c}]: {}\n", .{ @as(u8, @intCast(i)), cb.len });
-        }
-    }
-
-    var encoded = encodeCodeBlock(bitTable[0..], buffer);
-    @memcpy(&encoded.probs, &probs);
-    encoded.original_length = buffer.len;
+    constructBitTable(&bitTable, node, 0, 0);
+    encodeCodeBlock(&bitTable, &encoded, buffer);
 
     return encoded;
 }
 
-pub fn decode(encoded: *Encoded) []u8 {
-    const node = buildTree(&encoded.probs);
-
-    var decoded = std.heap.page_allocator.alloc(u8, encoded.original_length) catch unreachable;
-    // displayTree("", node);
+pub fn decode(allocator: Allocator, encoded: *Encoded) ![]u8 {
+    const node = buildTree(encoded.probs);
+    var decoded = try allocator.alloc(u8, encoded.original_length);
+    var curr: *Node = node;
 
     var idx: usize = 0;
-
-    var curr: *Node = node;
     var idx2: usize = 0;
 
     for (0..encoded.bit_length) |bit| {
@@ -48,9 +63,9 @@ pub fn decode(encoded: *Encoded) []u8 {
         }
 
         const shift: u3 = 7 - @as(u3, @intCast(bit % 8));
-        const bit_idx = @as(u8, 1) << shift;
+        const shifted_bit = @as(u8, 1) << shift;
 
-        if ((encoded.encoded[idx2] & (@as(u8, 1) << shift)) == bit_idx) {
+        if ((encoded.encoded[idx2] & shifted_bit) == shifted_bit) {
             curr = curr.right.?;
         } else {
             curr = curr.left.?;
@@ -117,6 +132,8 @@ pub fn buildTree(probs: []f64) *Node {
 }
 
 pub fn displayTree(prefix: []const u8, node: *Node) void {
+    std.debug.print("{s}[{c}]\n", .{ prefix, node.value orelse '+' });
+
     const prefix1 = std.fmt.allocPrint(std.heap.page_allocator, "{s}\t", .{prefix}) catch unreachable;
     defer std.heap.page_allocator.free(prefix1);
 
@@ -144,27 +161,7 @@ pub fn sortedInsertNode(array: []*Node, len: usize, node: *Node) void {
     array[idx] = node;
 }
 
-const Node = struct {
-    value: ?u8,
-    probs: f64,
-    left: ?*Node,
-    right: ?*Node,
-};
-
-const CodeBlock = struct {
-    bits: u8,
-    len: u8,
-};
-
-const Encoded = struct {
-    probs: [256]f64,
-    encoded: []u8,
-    compressed_length: usize,
-    original_length: usize,
-    bit_length: usize,
-};
-
-pub fn encodeCodeBlock(code_table: []CodeBlock, buffer: []u8) Encoded {
+pub fn encodeCodeBlock(code_table: []CodeBlock, encoded: *Encoded, buffer: []u8) void {
     var len_bits: usize = 0;
 
     var bytes: []u8 = std.heap.page_allocator.alloc(u8, buffer.len) catch unreachable;
@@ -179,11 +176,11 @@ pub fn encodeCodeBlock(code_table: []CodeBlock, buffer: []u8) Encoded {
             len -= code_block.len;
             bytes[idx] = bytes[idx] | (code_block.bits << @as(u3, @intCast(len)));
         } else {
-            const avail = code_block.len - len;
-            bytes[idx] = bytes[idx] | (code_block.bits >> @as(u3, @intCast(avail)));
+            const remain = code_block.len - len;
+            bytes[idx] = bytes[idx] | (code_block.bits >> @as(u3, @intCast(remain)));
             idx += 1;
             len = 8;
-            len -= (code_block.len - avail);
+            len -= remain;
             bytes[idx] = bytes[idx] | (code_block.bits << @as(u3, @intCast(len)));
         }
 
@@ -192,17 +189,8 @@ pub fn encodeCodeBlock(code_table: []CodeBlock, buffer: []u8) Encoded {
             len = 8;
         }
     }
-    // std.debug.print("len: {}\n", .{len_bits});
 
-    // for (0..idx + 1) |i| {
-    //     std.debug.print("{b}\n", .{bytes[i]});
-    // }
-
-    return Encoded{
-        .encoded = bytes,
-        .compressed_length = idx + 1,
-        .bit_length = len_bits,
-        .probs = undefined,
-        .original_length = 0,
-    };
+    encoded.encoded = bytes;
+    encoded.bit_length = len_bits;
+    encoded.compressed_length = idx + 1;
 }
