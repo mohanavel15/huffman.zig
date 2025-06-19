@@ -9,7 +9,7 @@ const Node = struct {
 };
 
 const CodeBlock = struct {
-    bits: u8,
+    bits: u256,
     len: u8,
 };
 
@@ -81,7 +81,7 @@ pub fn decode(allocator: Allocator, encoded: *Encoded) ![]u8 {
     return decoded;
 }
 
-pub fn constructBitTable(table: []CodeBlock, node: *Node, bits: u8, len: u8) void {
+pub fn constructBitTable(table: []CodeBlock, node: *Node, bits: u256, len: u8) void {
     if (node.value) |value| {
         table[value].bits = bits;
         table[value].len = len;
@@ -171,20 +171,20 @@ pub fn encodeCodeBlock(code_table: []CodeBlock, encoded: *Encoded, buffer: []u8)
     @memset(bytes, 0);
 
     var idx: usize = 0;
-    var len: usize = 8;
+    var len: u8 = 8;
     for (buffer) |byte| {
         const code_block = code_table[byte];
         len_bits += code_block.len;
         if (len >= code_block.len) {
             len -= code_block.len;
-            bytes[idx] = bytes[idx] | (code_block.bits << @as(u3, @intCast(len)));
+            bytes[idx] = bytes[idx] | @as(u8, @truncate(code_block.bits << len));
         } else {
             const remain = code_block.len - len;
-            bytes[idx] = bytes[idx] | (code_block.bits >> @as(u3, @intCast(remain)));
+            bytes[idx] = bytes[idx] | @as(u8, @truncate(code_block.bits >> remain));
             idx += 1;
             len = 8;
             len -= remain;
-            bytes[idx] = bytes[idx] | (code_block.bits << @as(u3, @intCast(len)));
+            bytes[idx] = bytes[idx] | @as(u8, @truncate(code_block.bits << len));
         }
 
         if (len == 0) {

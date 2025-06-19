@@ -10,7 +10,7 @@ pub fn main() !void {
         \\ such a code is Huffman coding, an algorithm
         \\ developed by David A. Huffman while he was a
         \\ Sc.D. student at MIT, and published in the 1952 paper
-        // \\ "A Method for the Construction of Minimum-Redundancy Codes" // Tree gets too deep to handle this line properly
+        \\ "A Method for the Construction of Minimum-Redundancy Codes"
     ;
 
     var encoded = try huffman.encode(std.heap.page_allocator, @constCast(message));
