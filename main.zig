@@ -13,8 +13,23 @@ pub fn main() !void {
         \\ "A Method for the Construction of Minimum-Redundancy Codes"
     ;
 
-    var encoded = try huffman.encode(std.heap.page_allocator, @constCast(message));
-    const decoded = try huffman.decode(std.heap.page_allocator, &encoded);
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        const leaked = gpa.deinit();
+        if (leaked == .leak) {
+            @panic("Memory Leaked!");
+        } else {
+            std.log.info("Cleaned Memory Successfully", .{});
+        }
+    }
+
+    var allocator = gpa.allocator();
+
+    var encoded = try huffman.encode(allocator, @constCast(message));
+    defer encoded.deinit(allocator);
+
+    const decoded = try huffman.decode(allocator, &encoded);
+    defer allocator.free(decoded);
 
     std.debug.print("----Raw----\n", .{});
     std.debug.print("Length: {}\n", .{message.len});

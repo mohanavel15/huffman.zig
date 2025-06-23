@@ -19,6 +19,12 @@ pub const Encoded = struct {
     compressed_length: usize,
     original_length: usize,
     bit_length: usize,
+
+    const Self = @This();
+    pub fn deinit(self: *Self, allocator: Allocator) void {
+        allocator.free(self.probs);
+        allocator.free(self.encoded);
+    }
 };
 
 pub fn encode(allocator: Allocator, buffer: []u8) !Encoded {
@@ -37,20 +43,20 @@ pub fn encode(allocator: Allocator, buffer: []u8) !Encoded {
     }
 
     std.debug.print("Tree: \n", .{});
-    const node = buildTree(encoded.probs);
-    displayTree(node, "", true);
+    const node = buildTree(std.heap.page_allocator, encoded.probs);
+    displayTree(allocator, node, "", true);
 
     var bitTable: [256]CodeBlock = undefined;
     @memset(&bitTable, .{ .bits = 0, .len = 0 });
 
     constructBitTable(&bitTable, node, 0, 0);
-    encodeCodeBlock(&bitTable, &encoded, buffer);
+    encodeCodeBlock(allocator, &bitTable, &encoded, buffer);
 
     return encoded;
 }
 
 pub fn decode(allocator: Allocator, encoded: *Encoded) ![]u8 {
-    const node = buildTree(encoded.probs);
+    const node = buildTree(std.heap.page_allocator, encoded.probs);
     var decoded = try allocator.alloc(u8, encoded.original_length);
     var curr: *Node = node;
 
@@ -96,13 +102,13 @@ pub fn constructBitTable(table: []CodeBlock, node: *Node, bits: u256, len: u8) v
     }
 }
 
-pub fn buildTree(probs: []f64) *Node {
+pub fn buildTree(allocator: Allocator, probs: []f64) *Node {
     var nonZeroNode: [256]*Node = undefined;
     var len: usize = 0;
 
     for (0..256) |idx| {
         if (probs[idx] > 0) {
-            var node = std.heap.page_allocator.create(Node) catch unreachable;
+            var node = allocator.create(Node) catch unreachable;
             node.value = @intCast(idx);
             node.probs = probs[idx];
             node.left = null;
@@ -118,7 +124,7 @@ pub fn buildTree(probs: []f64) *Node {
         const node2 = nonZeroNode[len - 2];
         len -= 2;
 
-        var node = std.heap.page_allocator.create(Node) catch unreachable;
+        var node = allocator.create(Node) catch unreachable;
         node.value = null;
         node.probs = node1.probs + node2.probs;
         node.left = node1;
@@ -131,21 +137,21 @@ pub fn buildTree(probs: []f64) *Node {
     return nonZeroNode[0];
 }
 
-pub fn displayTree(node: *Node, prefix: []const u8, is_left: bool) void {
+pub fn displayTree(allocator: Allocator, node: *Node, prefix: []const u8, is_left: bool) void {
     if (node.right) |right| {
-        const prefix_right = std.fmt.allocPrint(std.heap.page_allocator, "{s}{s}", .{ prefix, if (is_left) "│   " else "    " }) catch unreachable;
-        defer std.heap.page_allocator.free(prefix_right);
+        const prefix_right = std.fmt.allocPrint(allocator, "{s}{s}", .{ prefix, if (is_left) "│   " else "    " }) catch unreachable;
+        defer allocator.free(prefix_right);
 
-        displayTree(right, prefix_right, false);
+        displayTree(allocator, right, prefix_right, false);
     }
 
-    std.debug.print("{s}{s}{c}\n", .{ prefix, if (is_left) "└── " else "┌── ", if (node.value == '\n') '\\' else (node.value orelse '+') });
+    std.debug.print("{s}{s}{c}\n", .{ prefix, if (is_left) "└── " else "┌── ", node.value orelse '+' });
 
     if (node.left) |left| {
-        const prefix_left = std.fmt.allocPrint(std.heap.page_allocator, "{s}{s}", .{ prefix, if (!is_left) "│   " else "    " }) catch unreachable;
-        defer std.heap.page_allocator.free(prefix_left);
+        const prefix_left = std.fmt.allocPrint(allocator, "{s}{s}", .{ prefix, if (!is_left) "│   " else "    " }) catch unreachable;
+        defer allocator.free(prefix_left);
 
-        displayTree(left, prefix_left, true);
+        displayTree(allocator, left, prefix_left, true);
     }
 }
 
@@ -164,10 +170,10 @@ pub fn sortedInsertNode(array: []*Node, len: usize, node: *Node) void {
     array[idx] = node;
 }
 
-pub fn encodeCodeBlock(code_table: []CodeBlock, encoded: *Encoded, buffer: []u8) void {
+pub fn encodeCodeBlock(allocator: Allocator, code_table: []CodeBlock, encoded: *Encoded, buffer: []u8) void {
     var len_bits: usize = 0;
 
-    var bytes: []u8 = std.heap.page_allocator.alloc(u8, buffer.len) catch unreachable;
+    var bytes: []u8 = allocator.alloc(u8, buffer.len) catch unreachable;
     @memset(bytes, 0);
 
     var idx: usize = 0;
@@ -179,10 +185,13 @@ pub fn encodeCodeBlock(code_table: []CodeBlock, encoded: *Encoded, buffer: []u8)
             len -= code_block.len;
             bytes[idx] = bytes[idx] | @as(u8, @truncate(code_block.bits << len));
         } else {
-            const remain = code_block.len - len;
-            bytes[idx] = bytes[idx] | @as(u8, @truncate(code_block.bits >> remain));
-            idx += 1;
-            len = 8;
+            var remain = code_block.len;
+            while (remain > len) {
+                remain = remain - len;
+                bytes[idx] = bytes[idx] | @as(u8, @truncate(code_block.bits >> remain));
+                idx += 1;
+                len = 8;
+            }
             len -= remain;
             bytes[idx] = bytes[idx] | @as(u8, @truncate(code_block.bits << len));
         }
