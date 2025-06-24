@@ -43,7 +43,9 @@ pub fn encode(allocator: Allocator, buffer: []u8) !Encoded {
     }
 
     std.debug.print("Tree: \n", .{});
-    const node = buildTree(std.heap.page_allocator, encoded.probs);
+    const node = buildTree(allocator, encoded.probs);
+    defer destroyTree(allocator, node);
+
     displayTree(allocator, node, "", true);
 
     var bitTable: [256]CodeBlock = undefined;
@@ -56,7 +58,9 @@ pub fn encode(allocator: Allocator, buffer: []u8) !Encoded {
 }
 
 pub fn decode(allocator: Allocator, encoded: *Encoded) ![]u8 {
-    const node = buildTree(std.heap.page_allocator, encoded.probs);
+    const node = buildTree(allocator, encoded.probs);
+    defer destroyTree(allocator, node);
+
     var decoded = try allocator.alloc(u8, encoded.original_length);
     var curr: *Node = node;
 
@@ -135,6 +139,18 @@ pub fn buildTree(allocator: Allocator, probs: []f64) *Node {
     }
 
     return nonZeroNode[0];
+}
+
+pub fn destroyTree(allocator: Allocator, node: *Node) void {
+    defer allocator.destroy(node);
+
+    if (node.left) |left| {
+        destroyTree(allocator, left);
+    }
+
+    if (node.right) |right| {
+        destroyTree(allocator, right);
+    }
 }
 
 pub fn displayTree(allocator: Allocator, node: *Node, prefix: []const u8, is_left: bool) void {
