@@ -25,6 +25,60 @@ pub const Encoded = struct {
         allocator.free(self.probs);
         allocator.free(self.encoded);
     }
+
+    pub fn serialize(self: *const Self, allocator: Allocator) ![]u8 {
+        const probs = encodeToBytes(f64, &self.probs[0], self.probs.len);
+        const probs_len = encodeToBytes(usize, &probs.len, 1);
+        const compressed_len = encodeToBytes(usize, &self.compressed_length, 1);
+        const original_len = encodeToBytes(usize, &self.original_length, 1);
+        const bit_len = encodeToBytes(usize, &self.bit_length, 1);
+
+        const total_len = probs.len + probs_len.len + compressed_len.len + original_len.len + bit_len.len + self.compressed_length;
+
+        const final_buf = try allocator.alloc(u8, total_len);
+        @memcpy(final_buf[0..8], bit_len);
+        @memcpy(final_buf[8..16], original_len);
+        @memcpy(final_buf[16..24], probs_len);
+
+        var start: usize = 24;
+        @memcpy(final_buf[start .. start + probs.len], probs);
+        start += probs.len;
+
+        @memcpy(final_buf[start .. start + 8], compressed_len);
+        start += 8;
+
+        @memcpy(final_buf[start .. start + self.compressed_length], self.encoded[0..self.compressed_length]);
+
+        return final_buf;
+    }
+
+    pub fn deserialize(buffer: []u8) Self {
+        var start: usize = 0;
+        const bit_len = decodeFromBytes(usize, buffer[start .. start + 8])[0];
+        start += 8;
+
+        const original_len = decodeFromBytes(usize, buffer[start .. start + 8])[0];
+        start += 8;
+
+        const probs_len = decodeFromBytes(usize, buffer[start .. start + 8])[0];
+        start += 8;
+
+        const probs = decodeFromBytes(f64, buffer[start .. start + probs_len]);
+        start += probs_len;
+
+        const compress_len = decodeFromBytes(usize, buffer[start .. start + 8])[0];
+        start += 8;
+
+        const compressed = buffer[start .. start + compress_len];
+
+        return Encoded{
+            .probs = @constCast(probs),
+            .original_length = original_len,
+            .bit_length = bit_len,
+            .compressed_length = compress_len,
+            .encoded = @constCast(compressed),
+        };
+    }
 };
 
 pub fn encode(allocator: Allocator, buffer: []u8) !Encoded {
@@ -143,7 +197,6 @@ pub fn buildTree(allocator: Allocator, probs: []f64) *Node {
 
 pub fn destroyTree(allocator: Allocator, node: *Node) void {
     defer allocator.destroy(node);
-
     if (node.left) |left| {
         destroyTree(allocator, left);
     }
@@ -221,4 +274,18 @@ pub fn encodeCodeBlock(allocator: Allocator, code_table: []CodeBlock, encoded: *
     encoded.encoded = bytes;
     encoded.bit_length = len_bits;
     encoded.compressed_length = idx + 1;
+}
+
+// ------------------------ General  ------------------------ //
+
+fn encodeToBytes(comptime T: type, buf: *const T, len: usize) []const u8 {
+    return @as([*]const u8, @ptrCast(buf))[0 .. len * @sizeOf(T)];
+}
+
+fn decodeFromBytes(comptime T: type, bytes: []const u8) []const T {
+    const t_size = @sizeOf(T);
+    std.debug.assert(bytes.len % t_size == 0);
+
+    const aligned_ptr: [*]align(@alignOf(T)) const u8 = @alignCast(bytes.ptr);
+    return @as([*]const T, @ptrCast(aligned_ptr))[0 .. bytes.len / t_size];
 }
